@@ -1,0 +1,264 @@
+---
+title: "Project Part 1" 
+fontsize: 12pt
+geometry: margin=1in
+urlcolor: black
+output: pdf_document
+header-includes:
+- \usepackage{setspace}
+- \onehalfspacing
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, highlight=FALSE)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+df <- read.csv("LA_2024_PM25.csv", stringsAsFactors = FALSE)
+```
+
+## Question 1: Is the average daily PM2.5 in Los Angeles County during the summer of 2024 (June to August) significantly lower than that in the winter (December to February)?
+
+### Introduction
+Air pollution remains a major public health concern in large metropolitan regions, particularly in Southern California. Fine particulate matter (PM2.5) is of special interest because particles smaller than 2.5 micrometers can penetrate deep into the lungs and bloodstream, contributing to respiratory and cardiovascular risks. 
+
+Seasonal variation is commonly observed in PM2.5 levels, with winter often associated with higher concentrations due to weaker atmospheric mixing and increased heating-related emissions. To explore this pattern in Los Angeles County, we compare daily PM2.5 levels between summer (June–August 2024) and winter (December 2023–February 2024). Specifically, we ask: Is the daily average PM2.5 level in Los Angeles County lower in summer than in winter?
+
+To answer this question, we use publicly available EPA AirData daily PM2.5 measurements and summarize daily county-level averages across monitoring sites.
+
+### Data Summary 
+Source: EPA AirData \newline Time span: 2023-12–2024-08 \newline Measure: Daily mean PM2.5 (µg/m³) \newline Aggregation: county-day mean across sites
+```{r, echo=FALSE}
+df$Date <- as.Date(df$Date, format = "%m/%d/%Y")
+df_clean <- df[, c("Date", "Daily.Mean.PM2.5.Concentration", "County")]
+names(df_clean)[2] <- "pm25"
+df_clean$month <- as.numeric(format(df_clean$Date, "%m"))
+
+df_clean$season <- ifelse(df_clean$month %in% c(12,1,2), "Winter",
+                          ifelse(df_clean$month %in% c(6,7,8), "Summer", "Other"))
+df_clean <- df_clean[df_clean$season %in% c("Summer", "Winter") & !is.na(df_clean$pm25), ]
+table(df_clean$season)
+head(df_clean)
+
+by_day <- aggregate(pm25 ~ Date + season, data = df_clean, FUN = mean)
+table(by_day$season) 
+head(by_day)
+```
+```{r, echo=FALSE}
+# mean
+tapply(by_day$pm25, by_day$season, mean, na.rm = TRUE)
+
+# standard deviation
+tapply(by_day$pm25, by_day$season, sd, na.rm = TRUE)
+```
+### Exploratory Analysis
+```{r, echo=FALSE}
+boxplot(pm25 ~ season, data = by_day,
+        main = "LA County Daily PM2.5: Winter vs Summer (2024)",
+        xlab = "", ylab = "PM2.5 (µg/m³)")
+```
+
+```{r, echo=FALSE}
+o <- order(by_day$Date)
+plot(by_day$Date[o], by_day$pm25[o], type = "l",
+     xlab = "Date", ylab = "Daily Mean PM2.5 (µg/m³)",
+     main = "Daily PM2.5 over Time (LA County, 2024)")
+
+w <- by_day$season == "Winter"
+s <- by_day$season == "Summer"
+lines(by_day$Date[w][order(by_day$Date[w])], by_day$pm25[w][order(by_day$Date[w])])
+lines(by_day$Date[s][order(by_day$Date[s])], by_day$pm25[s][order(by_day$Date[s])])
+legend("topright", legend = c("Winter","Summer"), lty = 1, bty = "n")
+```
+We computed county-level daily means of PM2.5 by averaging across monitoring sites for each date. Comparing Summer (June–August) and Winter (December–February) days in 2024, the summer mean PM2.5 was 11.77 µg/m³ while the winter mean was 12.65 µg/m³, suggesting higher daily concentrations in winter on average. The standard deviation was 5.02 (summer) vs 7.26 (winter), indicating greater day-to-day variability in winter. Boxplots show a generally higher center and a wider spread for winter. The time-series plot reveals elevated winter levels and several winter peaks, whereas summer tends to be lower and more stable. These summaries are descriptive only; no statistical inference is conducted in Part 1.
+
+### Conclusions
+Based on descriptive summaries, daily PM2.5 levels in Los Angeles County appear lower in summer (mean = 11.77 µg/m³) than in winter (mean = 12.65 µg/m³). Winter days also show greater variability (SD = 7.26 vs. 5.02), suggesting more frequent short-term pollution spikes during colder months.
+
+Boxplots illustrate a higher center and wider spread for winter PM2.5 values, while the time-series visualization shows elevated concentrations and several distinct peaks during winter months. Summer PM2.5 levels are generally lower and more stable, consistent with stronger atmospheric mixing and fewer seasonal emission sources.
+
+These results align with typical seasonal air quality patterns in Southern California. However, this analysis is descriptive only. In Part 2, we will apply formal statistical inference to determine whether the observed difference is statistically significant and quantify uncertainty around seasonal mean estimates.
+\newpage
+## Question 2: Did NBA teams have "home-court advantage" during the period from 2014-10-04 to 2022-12-22?
+
+```{r, echo=FALSE}
+# ---- P0-setup ----
+pkgs <- c("tidyverse","lubridate","janitor","broom","scales")
+new  <- pkgs[!(pkgs %in% rownames(installed.packages()))]
+if (length(new)) install.packages(new, repos = "https://cloud.r-project.org")
+invisible(lapply(pkgs, library, character.only = TRUE))
+theme_set(theme_minimal(base_size = 12)); options(digits = 4, scipen = 999)
+
+path_csv <- "games.csv"   # ← 改成你的文件名
+raw <- readr::read_csv(path_csv, show_col_types = FALSE) |> janitor::clean_names()
+
+pick1 <- function(cands) intersect(cands, names(raw))[1]
+date_col <- pick1(c("game_date_est","game_date","date"))
+ph_col   <- pick1(c("pts_home","home_pts","pts_home_total"))
+pa_col   <- pick1(c("pts_away","away_pts","pts_away_total"))
+win_col  <- pick1(c("home_team_wins","home_win","homewin","home_victory"))
+
+stopifnot(!is.na(date_col), !is.na(ph_col), !is.na(pa_col))
+
+
+parse_any_date <- function(x){
+  if (inherits(x,"Date")) return(x)
+  if (inherits(x,"POSIXct")) return(as.Date(x))
+  y <- suppressWarnings(lubridate::mdy(x))
+  if (all(is.na(y))) y <- suppressWarnings(lubridate::ymd(x))
+  as.Date(y)
+}
+
+tmp <- raw |>
+  mutate(
+    game_date = parse_any_date(.data[[date_col]]),
+    pts_home  = as.numeric(.data[[ph_col]]),
+    pts_away  = as.numeric(.data[[pa_col]]),
+    home_win  = if (!is.na(win_col)) as.integer(.data[[win_col]] %in% c(1,"1",TRUE,"TRUE")) else NA_integer_
+  ) |>
+  filter(!is.na(game_date), !is.na(pts_home), !is.na(pts_away))
+
+date_min <- as.Date("2014-10-04")
+date_max <- as.Date("2022-12-22")
+
+tmp_range <- tmp |> filter(game_date >= date_min, game_date <= date_max)
+games <- if (nrow(tmp_range) > 0) tmp_range else tmp
+
+games <- games |> mutate(diff = pts_home - pts_away)
+
+summary_tbl <- tibble(
+  rows_all   = nrow(tmp),
+  rows_range = nrow(tmp_range),
+  used_rows  = nrow(games),
+  date_min_available = min(games$game_date, na.rm = TRUE),
+  date_max_available = max(games$game_date, na.rm = TRUE),
+  mean_diff  = mean(games$diff, na.rm = TRUE),
+  home_win_rate = if (!all(is.na(games$home_win))) mean(games$home_win, na.rm = TRUE) else NA_real_
+)
+summary_tbl
+
+```
+
+### Introduction
+Basketball fans often debate whether home teams really perform better. This report studies the home-court advantage in the NBA from 2014-10-04 to 2022-12-22, asking: Do home teams, on average, score more points and win more often than away teams?
+**Research Question:**  
+Does the NBA exhibit a statistically measurable *home-court advantage* between October 4 2014 and December 22 2022?  
+Specifically, do home teams on average score more points than away teams?
+
+This question is explored using game-level data that include both team scores and win/loss indicators.
+### Data Summary
+
+**Data Source.**  
+The dataset contains results of NBA games from *October 4 2014 through December 22 2022*.  
+These data were originally collected from official NBA box scores and provided in a structured CSV file containing each game’s date, home and away team identifiers, total points, and a binary indicator of whether the home team won.
+
+**Population or Sample.**  
+The file represents a large sample of NBA games during this period rather than a complete population of all historical games. The sample covers 11,420 valid games after cleaning.
+
+**Data Modifications.**  
+After importing the raw CSV, column names were standardized, dates were parsed into `Date` format, and missing or invalid scores were removed.  
+A new variable `diff = PTS_home - PTS_away` was created to measure the home–away point differential, and a binary variable `home_win` = 1 if the home team won.  
+Only games with complete score information within the target date range were retained.
+
+**Potential Issues.**  
+Some seasons include playoff or preseason games, and rule changes (e.g., shot clock or foul interpretations) may influence scoring. Additionally, team composition varies over years, which introduces unobserved heterogeneity. These factors may slightly bias the magnitude of the estimated advantage but not the direction.
+
+**Appropriateness of the Data.**  
+Because each row represents one game with independent outcomes and contains both home and away points, the dataset is directly suited to quantify the home-court advantage through summary comparisons of point differentials and win percentages.
+
+```{r}
+# ---- P1-EDA ----
+p1 <- ggplot(games, aes(diff)) +
+  geom_histogram(bins = 40) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  labs(title = "Distribution of Point Differential (Home - Away)",
+       x = "Point Differential", y = "Count")
+p2 <- ggplot(games, aes(y = diff)) +
+  geom_boxplot(width = .3) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  labs(title = "Point Differential: Boxplot", x = NULL, y = "Home - Away")
+p1; p2
+
+games |>
+  summarise(
+    n_games = n(),
+    mean_diff = mean(diff),
+    sd_diff = sd(diff),
+    home_win_rate = if (!all(is.na(home_win))) scales::percent(mean(home_win)) else NA_character_
+  )
+
+
+```
+### Exploratory Analysis
+
+**Numerical Summaries.**  
+- Number of games: 11,420  
+- Mean point differential (`PTS_home - PTS_away`): 2.35 points  
+- Standard deviation: 14.25 points  
+- Home win rate: 57.1 %
+
+**Graphical Summaries.**  
+Two plots illustrate the distribution of point differentials:  
+1. *Histogram of Point Differential (Figure 1)* – shows a nearly symmetric distribution centered slightly above 0.  
+2. *Boxplot of Point Differential (Figure 2)* – median and interquartile range lie on the positive side, confirming a consistent upward shift for home teams.
+
+**Interpretation of Summaries.**  
+Most games cluster within ±20 points, with a slight right shift of the distribution and median above 0. The average differential of +2.35 points suggests that home teams outscore visiting teams by roughly two to three points on average.  
+The home win rate of 57 % further supports a moderate but consistent home advantage.
+
+### Conclusions
+
+From the exploratory summaries, both numerical and graphical evidence indicate the presence of a meaningful home-court advantage in the NBA between 2014 and 2022.  
+
+- The mean score differential of +2.35 points implies that home teams typically score slightly more than their opponents.  
+- The distribution of differentials centers on the positive side, suggesting the effect is widespread rather than driven by outliers.  
+- A home win rate near 57 % confirms that the majority of games are won by home teams, consistent with the positive mean differential.  
+
+While these results describe a clear pattern, they do not yet constitute formal statistical inference. Part 2 of the project will test whether the observed mean difference and win proportion are statistically greater than zero and 0.5, respectively.  
+
+In context, the findings align with sports psychology research suggesting that fan support, reduced travel stress, and familiarity with local conditions contribute to better home performance.
+
+```{r}
+# ---- P2-Inference ----
+if (sum(!is.na(games$diff)) >= 2) {
+  t_res <- t.test(games$diff, mu = 0, alternative = "greater")
+  t_res
+  broom::tidy(t_res)
+} else {
+  message("Not enough non-missing values in 'diff' to conduct a t-test (need at least 2 observations).")
+}
+
+if (!all(is.na(games$home_win))) {
+  wins <- sum(games$home_win, na.rm = TRUE)
+  n    <- sum(!is.na(games$home_win))
+  if (n >= 1) {
+    prop_res <- prop.test(x = wins, n = n, p = 0.5, alternative = "greater", correct = FALSE)
+    prop_res
+    broom::tidy(prop_res)
+  } else {
+    message("There are no valid 'home_win' observations available for the proportion test.")
+  }
+} else {
+  message("No 'home_win' column found (or all values missing), skipping the proportion test.")
+}
+
+```
+\newpage
+
+### References
+- https://www.epa.gov/outdoor-air-quality-data/download-daily-data
+
+- National Basketball Association. *Game Box Score Statistics.* Data compiled from official NBA results, 2014–2022.  
+- R Core Team (2025). *R: A Language and Environment for Statistical Computing.* R Foundation for Statistical Computing, Vienna, Austria.  
+- Wickham, H. (2019). *ggplot2: Elegant Graphics for Data Analysis.* Springer-Verlag, New York.  
+- UCLA Statistical Consulting Group. “T-Tests and Proportion Tests in R.” (Accessed 2025).  
+- https://www.kaggle.com/datasets/nathanlauga/nba-games
+
+
+
+```{r}
+## R code to conduct the test in part 2.
+## This R code will be printed in the PDF.
+## Remove the ## before all code.
+```
+
